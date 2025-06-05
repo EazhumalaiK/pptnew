@@ -9,7 +9,7 @@ const OfficePptViewer: React.FC<OfficePptViewerProps> = ({ pptxUrl }) => {
   const embedUrl = `https://view.officeapps.live.com/op/embed.aspx?src=${encodedUrl}`;
 
   return (
-    <div style={{ width: "100%", height: "600px" }}>
+    <div style={{ width: "100%", height: "601px" }}>
       <iframe
         title="PowerPoint Viewer"
         src={embedUrl}
