@@ -22,6 +22,8 @@ interface FileInfo {
   slideCount: number | "Unknown" | null;
 }
 
+const backendUrl = "http://127.0.0.1:8000"; // backend base URL
+
 const PptUploadRow: React.FC = () => {
   const [selectedReport, setSelectedReport] = useState<string | null>(null);
   const [fileInfo, setFileInfo] = useState<FileInfo | null>(null);
@@ -33,6 +35,12 @@ const PptUploadRow: React.FC = () => {
     null
   );
   const [isProcessing, setIsProcessing] = useState(false);
+  const [slideImages, setSlideImages] = useState<string[]>([]);
+  const [correctedSlideImages, setCorrectedSlideImages] = useState<string[]>(
+    []
+  );
+  const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
+  const [comments, setComments] = useState<string[]>([]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -41,6 +49,10 @@ const PptUploadRow: React.FC = () => {
     setUploadedFile(file);
     setCorrectedFileUrl(null);
     setAmendedSlidesCount(null);
+    setSlideImages([]);
+    setCorrectedSlideImages([]);
+    setComments([]);
+    setCurrentSlideIndex(0);
 
     const isPptx = file.name.toLowerCase().endsWith(".pptx");
     const isPpt = file.name.toLowerCase().endsWith(".ppt");
@@ -100,67 +112,86 @@ const PptUploadRow: React.FC = () => {
     setError("");
     setCorrectedFileUrl(null);
     setAmendedSlidesCount(null);
+    setIsProcessing(true);
 
-    // If language option selected, call API to validate & correct slides
-    if (selectedOptions.includes("language")) {
-      setIsProcessing(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", uploadedFile);
+      formData.append("report", selectedReport);
+      formData.append("options", JSON.stringify(selectedOptions));
 
-      try {
-        const formData = new FormData();
-        formData.append("file", uploadedFile);
-        formData.append("report", selectedReport);
-        formData.append("options", JSON.stringify(selectedOptions));
+      const response = await fetch(`${backendUrl}/convert-ppt`, {
+        method: "POST",
+        body: formData,
+      });
 
-        // Replace "/api/process-ppt" with your actual API endpoint
-        const response = await fetch("/api/process-ppt", {
-          method: "POST",
-          body: formData,
-        });
-
-        if (!response.ok) {
-          throw new Error("Failed to process the PPT file.");
-        }
-
-        // We expect the API to respond with a JSON object and file blob separately
-        // Usually, APIs send the file as blob or provide a download URL in JSON
-        // For demo, assume API returns JSON with amendedSlidesCount and file as blob
-
-        // To handle blob and JSON together, you'd typically do:
-        // - API returns JSON { amendedSlidesCount, fileUrl }
-        // or
-        // - API returns a multipart response or sends file as blob with header info
-
-        // Here we assume API sends JSON with { amendedSlidesCount, fileUrl }
-
-        const result = await response.json();
-
-        if (result.fileUrl) {
-          // Use URL from server
-          setCorrectedFileUrl(result.fileUrl);
-        } else if (result.fileBlob) {
-          // If fileBlob as base64 string or similar, decode and create URL (example)
-          // Not shown here, depends on API implementation
-        } else {
-          // No file url? fallback:
-          setCorrectedFileUrl(null);
-        }
-
-        setAmendedSlidesCount(result.amendedSlidesCount || 0);
-        alert("Process completed successfully!");
-      } catch (err: any) {
-        setError(err.message || "Error processing the file.");
-      } finally {
-        setIsProcessing(false);
+      if (!response.ok) {
+        throw new Error(`Server error: ${response.statusText}`);
       }
-    } else {
-      alert("Process started successfully!");
+
+      const result = await response.json();
+
+      // Backend returns relative paths like "/slides/slide_1.png"
+      // Prepend backendUrl to make them absolute URLs
+      const originalImages = (result.imageUrls || []).map(
+        (path: string) => backendUrl + path
+      );
+      const correctedImages = (result.correctedImageUrls || originalImages).map(
+        (path: string) => backendUrl + path
+      );
+
+      setSlideImages(originalImages);
+      setCorrectedSlideImages(correctedImages);
+      setComments(new Array(originalImages.length).fill(""));
+      setCurrentSlideIndex(0);
+    } catch (err: any) {
+      setError(err.message || "Error processing the file.");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleCommentChange = async (index: number, value: string) => {
+    const updatedComments = [...comments];
+    updatedComments[index] = value;
+    setComments(updatedComments);
+
+    try {
+      const response = await fetch(`${backendUrl}/amend-slide`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          slideIndex: index,
+          comment: value,
+          report: selectedReport,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to amend slide: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+
+      const updatedCorrectedSlides = [...correctedSlideImages];
+      // Again prepend backend URL if backend returns relative path
+      updatedCorrectedSlides[index] = result.correctedImageUrl.startsWith(
+        "http"
+      )
+        ? result.correctedImageUrl
+        : backendUrl + result.correctedImageUrl;
+
+      setCorrectedSlideImages(updatedCorrectedSlides);
+    } catch (err) {
+      console.error("Failed to amend slide.", err);
     }
   };
 
   return (
     <div className="p-6 border rounded-lg shadow-sm bg-white w-full">
       <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
-        {/* Report Dropdown */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
             Report
@@ -169,6 +200,7 @@ const PptUploadRow: React.FC = () => {
             className="w-full border px-3 py-2 rounded-md"
             value={selectedReport || ""}
             onChange={(e) => setSelectedReport(e.target.value)}
+            disabled={isProcessing}
           >
             <option value="">Select Report</option>
             {reportOptions.map((opt) => (
@@ -179,7 +211,6 @@ const PptUploadRow: React.FC = () => {
           </select>
         </div>
 
-        {/* Upload */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
             Upload PPT
@@ -193,7 +224,6 @@ const PptUploadRow: React.FC = () => {
           />
         </div>
 
-        {/* File Info */}
         <div className="text-sm text-gray-600 space-y-1">
           <label className="block text-sm font-medium text-gray-700 mb-1">
             File Info
@@ -218,7 +248,6 @@ const PptUploadRow: React.FC = () => {
           )}
         </div>
 
-        {/* Multi-Select */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
             Options
@@ -233,7 +262,6 @@ const PptUploadRow: React.FC = () => {
           />
         </div>
 
-        {/* Start Button */}
         <div className="pt-7">
           <button
             onClick={handleStart}
@@ -247,30 +275,111 @@ const PptUploadRow: React.FC = () => {
         </div>
       </div>
 
-      {/* Error Message */}
       {error && (
         <div className="mt-4 text-red-600 text-sm font-medium">{error}</div>
       )}
 
-      {/* Download corrected file */}
-      {correctedFileUrl && (
-        <div className="mt-4">
-          <a
-            href={correctedFileUrl}
-            download={`corrected_${fileInfo?.name}`}
-            className="text-blue-600 underline"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Download Corrected PPT
-          </a>
-        </div>
-      )}
+      {slideImages.length > 0 && (
+        <div className="mt-6">
+          <div className="flex space-x-2 mb-4 overflow-x-auto">
+            {slideImages.map((_, idx) => (
+              <button
+                key={idx}
+                onClick={() => setCurrentSlideIndex(idx)}
+                className={`px-3 py-1 rounded-md border ${
+                  currentSlideIndex === idx
+                    ? "bg-blue-600 text-white"
+                    : "bg-gray-100"
+                }`}
+              >
+                {idx + 1}
+              </button>
+            ))}
+          </div>
 
-      {/* Amended slides count */}
-      {amendedSlidesCount !== null && (
-        <div className="mt-2 text-green-600 font-medium">
-          Slides Amended: {amendedSlidesCount}
+          <div className="grid grid-cols-3 gap-6">
+            <div>
+              <img
+                src={slideImages[currentSlideIndex]}
+                alt={`Original Slide ${currentSlideIndex + 1}`}
+                className="w-full border rounded"
+              />
+            </div>
+            <div>
+              <img
+                src={correctedSlideImages[currentSlideIndex]}
+                alt={`Corrected Slide ${currentSlideIndex + 1}`}
+                className="w-full border rounded"
+              />
+            </div>
+            <div>
+              <textarea
+                value={comments[currentSlideIndex] || ""}
+                onChange={(e) =>
+                  handleCommentChange(currentSlideIndex, e.target.value)
+                }
+                placeholder="Enter your comment..."
+                className="w-full h-40 p-2 border rounded resize-none"
+              />
+            </div>
+          </div>
+
+          <div className="mt-6 flex justify-between">
+            <button
+              onClick={() =>
+                setCurrentSlideIndex((prev) => Math.max(prev - 1, 0))
+              }
+              disabled={currentSlideIndex === 0}
+              className="px-4 py-2 bg-gray-300 rounded hover:bg-gray-400"
+            >
+              ← Prev
+            </button>
+            <button
+              onClick={() =>
+                setCurrentSlideIndex((prev) =>
+                  Math.min(prev + 1, slideImages.length - 1)
+                )
+              }
+              disabled={currentSlideIndex === slideImages.length - 1}
+              className="px-4 py-2 bg-gray-300 rounded hover:bg-gray-400"
+            >
+              Next →
+            </button>
+            <button
+              className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+              onClick={async () => {
+                try {
+                  const response = await fetch(
+                    `${backendUrl}/download-corrected-ppt`,
+                    {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        correctedSlides: correctedSlideImages,
+                      }),
+                    }
+                  );
+
+                  if (!response.ok) {
+                    throw new Error(`Download failed: ${response.statusText}`);
+                  }
+
+                  const blob = await response.blob();
+                  const url = window.URL.createObjectURL(blob);
+                  const link = document.createElement("a");
+                  link.href = url;
+                  link.setAttribute("download", "corrected_presentation.pptx");
+                  document.body.appendChild(link);
+                  link.click();
+                  link.remove();
+                } catch (error) {
+                  alert(`Download error: ${(error as Error).message}`);
+                }
+              }}
+            >
+              Submit & Download
+            </button>
+          </div>
         </div>
       )}
     </div>
