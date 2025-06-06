@@ -22,7 +22,7 @@ interface FileInfo {
   slideCount: number | "Unknown" | null;
 }
 
-const backendUrl = "http://127.0.0.1:8000"; // backend base URL
+const backendUrl = "http://127.0.0.1:8000";
 
 const PptUploadRow: React.FC = () => {
   const [selectedReport, setSelectedReport] = useState<string | null>(null);
@@ -40,7 +40,10 @@ const PptUploadRow: React.FC = () => {
     []
   );
   const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
-  const [comments, setComments] = useState<string[]>([]);
+  const [comments, setComments] = useState<
+    { text: string; timestamp: string }[][]
+  >([]);
+  const [newComment, setNewComment] = useState<string>("");
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -131,8 +134,6 @@ const PptUploadRow: React.FC = () => {
 
       const result = await response.json();
 
-      // Backend returns relative paths like "/slides/slide_1.png"
-      // Prepend backendUrl to make them absolute URLs
       const originalImages = (result.imageUrls || []).map(
         (path: string) => backendUrl + path
       );
@@ -142,50 +143,12 @@ const PptUploadRow: React.FC = () => {
 
       setSlideImages(originalImages);
       setCorrectedSlideImages(correctedImages);
-      setComments(new Array(originalImages.length).fill(""));
+      setComments(new Array(originalImages.length).fill(null).map(() => []));
       setCurrentSlideIndex(0);
     } catch (err: any) {
       setError(err.message || "Error processing the file.");
     } finally {
       setIsProcessing(false);
-    }
-  };
-
-  const handleCommentChange = async (index: number, value: string) => {
-    const updatedComments = [...comments];
-    updatedComments[index] = value;
-    setComments(updatedComments);
-
-    try {
-      const response = await fetch(`${backendUrl}/amend-slide`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          slideIndex: index,
-          comment: value,
-          report: selectedReport,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to amend slide: ${response.statusText}`);
-      }
-
-      const result = await response.json();
-
-      const updatedCorrectedSlides = [...correctedSlideImages];
-      // Again prepend backend URL if backend returns relative path
-      updatedCorrectedSlides[index] = result.correctedImageUrl.startsWith(
-        "http"
-      )
-        ? result.correctedImageUrl
-        : backendUrl + result.correctedImageUrl;
-
-      setCorrectedSlideImages(updatedCorrectedSlides);
-    } catch (err) {
-      console.error("Failed to amend slide.", err);
     }
   };
 
@@ -313,14 +276,83 @@ const PptUploadRow: React.FC = () => {
               />
             </div>
             <div>
-              <textarea
-                value={comments[currentSlideIndex] || ""}
-                onChange={(e) =>
-                  handleCommentChange(currentSlideIndex, e.target.value)
-                }
-                placeholder="Enter your comment..."
-                className="w-full h-40 p-2 border rounded resize-none"
-              />
+              <div className="flex flex-col h-40 border rounded p-2">
+                <div className="flex-1 overflow-y-auto mb-2 space-y-1 pr-1">
+                  {(comments[currentSlideIndex] || []).map((entry, idx) => (
+                    <div key={idx} className="bg-gray-100 p-2 rounded text-sm">
+                      <div>{entry.text}</div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        {new Date(entry.timestamp).toLocaleTimeString()}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex mt-1">
+                  <input
+                    type="text"
+                    value={newComment}
+                    onChange={(e) => setNewComment(e.target.value)}
+                    placeholder="Enter your comment..."
+                    className="flex-1 border rounded-l px-2 py-1 text-sm"
+                  />
+                  <button
+                    onClick={async () => {
+                      if (!newComment.trim()) return;
+
+                      const commentObj = {
+                        text: newComment.trim(),
+                        timestamp: new Date().toISOString(),
+                      };
+
+                      const updated = [
+                        ...(comments[currentSlideIndex] || []),
+                        commentObj,
+                      ];
+                      const all = [...comments];
+                      all[currentSlideIndex] = updated;
+                      setComments(all);
+                      setNewComment("");
+
+                      try {
+                        const response = await fetch(
+                          `${backendUrl}/amend-slide`,
+                          {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              slideIndex: currentSlideIndex,
+                              comment: commentObj.text,
+                              report: selectedReport,
+                            }),
+                          }
+                        );
+
+                        if (!response.ok) {
+                          throw new Error(
+                            `Failed to amend slide: ${response.statusText}`
+                          );
+                        }
+
+                        const result = await response.json();
+                        const updatedCorrectedSlides = [
+                          ...correctedSlideImages,
+                        ];
+                        updatedCorrectedSlides[currentSlideIndex] =
+                          result.correctedImageUrl.startsWith("http")
+                            ? result.correctedImageUrl
+                            : backendUrl + result.correctedImageUrl;
+
+                        setCorrectedSlideImages(updatedCorrectedSlides);
+                      } catch (err) {
+                        console.error("Failed to amend slide.", err);
+                      }
+                    }}
+                    className="bg-blue-600 text-white px-3 py-1 rounded-r hover:bg-blue-700 text-sm"
+                  >
+                    Send
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
 
